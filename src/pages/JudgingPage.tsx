@@ -8,7 +8,7 @@ export default function JudgingPage() {
   const [participants, setParticipants] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [scores, setScores] = useState<Record<string, any>>({});
-  
+
   // Bulk Sign Modal
   const [isSignModalOpen, setIsSignModalOpen] = useState(false);
   const [signature, setSignature] = useState('');
@@ -25,25 +25,87 @@ export default function JudgingPage() {
   async function fetchAssignments() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-    const { data } = await supabase.from('assignments').select('*, categories(*)').eq('judge_id', user.id);
-    if (data && data.length > 0) {
-      setAllAssignments(data);
-      setCurrentAssignment(data[0]);
+
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+
+    let catData;
+
+    if (profile?.role === 'admin') {
+      // ADMIN: Fetch directly from categories
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .order('competition_name', { ascending: true })
+        .order('class_name', { ascending: true });
+
+      if (error) console.error("Admin fetch error:", error);
+
+      // CRITICAL: We wrap the category in a 'categories' key to match the Judge data structure
+      catData = data?.map(cat => ({
+        id: cat.id,
+        category_id: cat.id,
+        categories: cat // This ensures currentAssignment.categories.class_name works!
+      }));
+    } else {
+      // JUDGE: Fetch from assignments
+      const { data } = await supabase
+        .from('assignments')
+        .select('*, categories(*)')
+        .eq('judge_id', user.id);
+
+      catData = data;
+    }
+
+    if (catData && catData.length > 0) {
+      setAllAssignments(catData);
+      setCurrentAssignment(catData[0]);
     }
     setLoading(false);
   }
 
   async function fetchParticipants(catId: string) {
-    const { data: pData } = await supabase.from('participants').select('*').eq('category_id', catId).eq('attended', true);
-    setParticipants(pData || []);
-    
+    // 1. Fetch participants who attended this category
+    const { data: pData } = await supabase
+      .from('participants')
+      .select('*')
+      .eq('category_id', catId)
+      .eq('attended', true);
+
+    const participantList = pData || [];
+    setParticipants(participantList);
+
     const { data: { user } } = await supabase.auth.getUser();
-    const { data: existingScores } = await supabase.from('scores').select('*').eq('judge_id', user?.id);
-    
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', user?.id).single();
+
+    // 2. Prepare the Score Query
+    let scoreQuery = supabase.from('scores').select('*');
+
+    if (profile?.role === 'admin') {
+      // Extract all participant IDs for this category
+      const pIds = participantList.map(p => p.id);
+
+      // ADMIN: Fetch finalized scores for ALL participants in this list
+      scoreQuery = scoreQuery
+        .in('participant_id', pIds)
+        .eq('is_finalized', true);
+    } else {
+      // JUDGE: Only see your own scores
+      scoreQuery = scoreQuery.eq('judge_id', user?.id);
+    }
+
+    const { data: existingScores } = await scoreQuery;
+
     const scoreMap: Record<string, any> = {};
     existingScores?.forEach(s => {
-      scoreMap[s.participant_id] = { marks: s.marks, is_finalized: s.is_finalized, signed_name: s.signed_name };
+      // Map scores to participant IDs
+      // If multiple judges have finalized, this takes the latest one found
+      scoreMap[s.participant_id] = {
+        marks: s.marks,
+        is_finalized: s.is_finalized,
+        signed_name: s.signed_name
+      };
     });
+
     setScores(scoreMap);
   }
 
@@ -64,7 +126,7 @@ export default function JudgingPage() {
   const saveAllDrafts = async () => {
     setIsSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
-    
+
     const upsertData = participants.map(p => ({
       participant_id: p.id,
       judge_id: user?.id,
@@ -73,7 +135,7 @@ export default function JudgingPage() {
     }));
 
     const { error } = await supabase.from('scores').upsert(upsertData, { onConflict: 'participant_id, judge_id' });
-    
+
     if (error) alert(error.message);
     else alert("All progress saved as draft!");
     setIsSaving(false);
@@ -86,7 +148,7 @@ export default function JudgingPage() {
     setIsSaving(true);
 
     const { data: { user } } = await supabase.auth.getUser();
-    
+
     const finalizeData = participants.map(p => ({
       participant_id: p.id,
       judge_id: user?.id,
@@ -117,7 +179,7 @@ export default function JudgingPage() {
         <div className="max-w-5xl mx-auto p-4 flex flex-col gap-4">
           <div className="flex justify-between items-center">
             <h1 className="text-xl font-bold flex items-center gap-2"><ClipboardList /> Judging</h1>
-            
+
             {/* Global Actions */}
             <div className="flex gap-2">
               {!isClassLocked ? (
@@ -125,7 +187,7 @@ export default function JudgingPage() {
                   <button onClick={saveAllDrafts} className="hidden md:flex items-center gap-2 px-4 py-2 bg-indigo-800 rounded-xl text-sm font-bold hover:bg-indigo-700 transition">
                     <Save size={16} /> Save All Drafts
                   </button>
-                  <button 
+                  <button
                     onClick={() => setIsSignModalOpen(true)}
                     className="flex items-center gap-2 px-4 py-2 bg-green-600 rounded-xl text-sm font-bold hover:bg-green-500 transition shadow-lg shadow-green-900/20"
                   >
@@ -140,10 +202,18 @@ export default function JudgingPage() {
             </div>
           </div>
 
-          <div className="flex gap-2 overflow-x-auto">
+          <div className="flex gap-2 overflow-x-auto pb-2">
             {allAssignments.map((assign) => (
-              <button key={assign.id} onClick={() => setCurrentAssignment(assign)} className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition ${currentAssignment?.id === assign.id ? "bg-white text-indigo-900" : "bg-indigo-800 text-indigo-200"}`}>
-                {assign.categories.class_name}
+              <button
+                key={assign.id}
+                onClick={() => setCurrentAssignment(assign)}
+                className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition shadow-sm ${currentAssignment?.id === assign.id
+                  ? "bg-white text-indigo-900"
+                  : "bg-indigo-800 text-indigo-200 hover:bg-indigo-700"
+                  }`}
+              >
+                {/* Combine Competition and Class names here */}
+                {assign.categories.competition_name} - {assign.categories.class_name}
               </button>
             ))}
           </div>
@@ -158,14 +228,14 @@ export default function JudgingPage() {
               <div className="p-4 flex justify-between items-center border-b border-slate-50">
                 <h2 className="font-black text-slate-800 uppercase">{p.name}</h2>
                 <div className="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg font-mono font-black">
-                  {scoreData.marks.reduce((a:any, b:any) => a + b, 0)}
+                  {scoreData.marks.reduce((a: any, b: any) => a + b, 0)}
                 </div>
               </div>
               <div className="p-4 grid grid-cols-4 gap-3">
                 {currentAssignment.categories.rubric_labels.map((label: string, index: number) => (
                   <div key={label} className="space-y-1">
                     <p className="text-[9px] uppercase font-bold text-slate-400 truncate">{label}</p>
-                    <input 
+                    <input
                       type="number" disabled={scoreData.is_finalized}
                       value={scoreData.marks[index]}
                       onChange={(e) => handleScoreChange(p.id, index, e.target.value)}

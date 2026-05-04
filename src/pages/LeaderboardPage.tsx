@@ -1,168 +1,157 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../api/supabase';
-import { Trophy, Medal, Award, BarChart3, Users, RefreshCw } from 'lucide-react';
+import { Trophy, Medal, Award, CheckCircle, PenTool } from 'lucide-react';
 
 export default function LeaderboardPage() {
   const [results, setResults] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [selectedCat, setSelectedCat] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [isFinalized, setIsFinalized] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
-  // 1. Fetch Categories on mount
   useEffect(() => {
-    fetchCategories();
+    fetchInitialData();
   }, []);
 
-  // 2. Fetch Rankings whenever selection changes
   useEffect(() => {
-    if (selectedCat) {
-      fetchRankings(selectedCat);
-    } else {
-      setResults([]);
-    }
+    if (selectedCat) fetchRankings(selectedCat);
   }, [selectedCat]);
 
-  async function fetchCategories() {
-    const { data, error } = await supabase
-      .from('categories')
-      .select('*')
-      .order('competition_name', { ascending: true });
-    
-    if (error) console.error("Error fetching categories:", error.message);
-    else setCategories(data || []);
+  async function fetchInitialData() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+    setUserRole(profile?.role);
+
+    let query = supabase.from('categories').select('*');
+
+    if (profile?.role === 'judge') {
+      const { data: assignments } = await supabase.from('assignments').select('category_id').eq('judge_id', user.id);
+      const catIds = assignments?.map(a => a.category_id) || [];
+      query = query.in('id', catIds);
+    }
+
+    const { data: catData } = await query
+      .order('competition_name', { ascending: true })
+      .order('class_name', { ascending: true });
+
+    setCategories(catData || []);
+    if (catData?.length === 1) setSelectedCat(catData[0].id);
   }
 
   async function fetchRankings(catId: string) {
-    setLoading(true);
-    // Fetch participants and their scores for the chosen category
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('participants')
-      .select(`
-        name,
-        scores (
-          total_score,
-          is_finalized
-        )
-      `)
+      .select('name, scores(total_score, is_finalized, signed_name)')
       .eq('category_id', catId);
 
-    if (error) {
-      console.error("Error fetching rankings:", error.message);
-    } else if (data) {
-      // Process scores: Filter for finalized consensus marks and average them
-      const processed = data.map(p => {
-        const finalizedScores = p.scores?.filter((s: any) => s.is_finalized) || [];
-        
-        // Calculate average score
-        const total = finalizedScores.reduce((acc: number, curr: any) => acc + curr.total_score, 0);
-        const avg = finalizedScores.length > 0 ? total / finalizedScores.length : 0;
-        
-        return {
-          name: p.name,
-          score: avg,
-          judgeCount: finalizedScores.length
-        };
-      })
-      .filter(p => p.judgeCount > 0) // Only show people who actually have finalized marks
-      .sort((a, b) => b.score - a.score); // Highest score first
+    if (data) {
+      const rawResults = data.map(p => {
+        const finalized = p.scores?.filter((s: any) => s.is_finalized) || [];
+        const avg = finalized.length > 0 ? finalized.reduce((a: any, b: any) => a + b.total_score, 0) / finalized.length : 0;
+        return { name: p.name, score: avg };
+      }).sort((a, b) => b.score - a.score);
 
-      setResults(processed);
+      // LOGIC: Calculate Rank (1224) and Prize Tier (1223)
+      let currentRank = 0;
+      let currentPrizeTier = 0;
+      let lastScore = -1;
+
+      const rankedResults = rawResults.map((item, index) => {
+        if (item.score !== lastScore) {
+          // Score changed! Move to next prize tier and actual rank
+          currentPrizeTier++;
+          currentRank = index + 1;
+        }
+        // If score is the same, currentPrizeTier and currentRank stay as they were
+
+        lastScore = item.score;
+
+        return {
+          ...item,
+          displayRank: currentRank,
+          prizeTier: currentPrizeTier
+        };
+      });
+
+      setResults(rankedResults);
+      setIsFinalized(data[0]?.scores?.some((s: any) => s.is_finalized));
     }
-    setLoading(false);
   }
 
+  // Change the functions to take prizeTier instead of rank
+  const getCardBg = (prizeTier: number) => {
+    if (prizeTier === 1) return "bg-[#FFD700] border-[#E6C200] shadow-md shadow-yellow-200/50"; // Gold
+    if (prizeTier === 2) return "bg-[#C0C0C0] border-[#A9A9A9] shadow-md shadow-slate-300/50"; // Silver
+    if (prizeTier === 3) return "bg-[#A77F60] border-[#B87333] shadow-md shadow-orange-300/50 text-white"; // Bronze
+    return "bg-white border-transparent shadow-sm";
+  };
+
+  const getTextColor = (prizeTier: number) => {
+    if (prizeTier === 1) return "text-yellow-950";
+    if (prizeTier === 2) return "text-slate-900";
+    if (prizeTier === 3) return "text-white";
+    return "text-indigo-950";
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 pb-20">
-      {/* Header */}
-      <div className="bg-indigo-950 text-white p-8 shadow-xl">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div>
-              <h1 className="text-3xl font-black tracking-tight flex items-center gap-3">
-                <Trophy className="text-yellow-400" size={32} />
-                Winner's Circle
-              </h1>
-              <p className="text-indigo-300 mt-1 font-medium">Final Consensus Standings</p>
-            </div>
-
-            <div className="relative group">
-              <select 
-                value={selectedCat}
-                onChange={(e) => setSelectedCat(e.target.value)}
-                className="w-full md:w-64 p-4 bg-indigo-900/50 border border-indigo-700 rounded-2xl text-white font-bold appearance-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all cursor-pointer"
-              >
-                <option value="" className="bg-indigo-950">Select Competition</option>
-                {categories.map(c => (
-                  <option key={c.id} value={c.id} className="bg-indigo-950">
-                    {c.competition_name} - {c.class_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+    <div className="min-h-screen bg-slate-50 p-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-black text-indigo-950">RESULTS</h1>
+          <select
+            value={selectedCat}
+            onChange={(e) => setSelectedCat(e.target.value)}
+            className="p-3 bg-white rounded-xl border-none shadow-sm font-bold text-indigo-600 outline-none"
+          >
+            <option value="">Select Category</option>
+            {categories.map(c => <option key={c.id} value={c.id}>{c.competition_name} - {c.class_name}</option>)}
+          </select>
         </div>
-      </div>
 
-      <div className="max-w-4xl mx-auto p-4 -mt-6">
-        {loading ? (
-          <div className="bg-white rounded-3xl p-20 shadow-sm flex flex-col items-center justify-center text-slate-400">
-            <RefreshCw className="animate-spin mb-4" size={40} />
-            <p className="font-bold">Calculating results...</p>
-          </div>
-        ) : results.length > 0 ? (
-          <div className="space-y-4">
-            {results.map((r, index) => {
-              const isTop3 = index < 3;
-              return (
-                <div 
-                  key={r.name} 
-                  className={`flex items-center p-6 rounded-3xl transition-all border-2 ${
-                    index === 0 ? "bg-yellow-50 border-yellow-200 shadow-yellow-100 shadow-lg" : 
-                    index === 1 ? "bg-slate-50 border-slate-200" :
-                    index === 2 ? "bg-orange-50 border-orange-100" :
-                    "bg-white border-transparent shadow-sm"
-                  }`}
-                >
-                  {/* Rank Badge */}
-                  <div className="w-14 h-14 flex items-center justify-center rounded-2xl mr-6 shrink-0 bg-white shadow-sm">
-                    {index === 0 && <Trophy className="text-yellow-500" size={28} />}
-                    {index === 1 && <Medal className="text-slate-400" size={28} />}
-                    {index === 2 && <Award className="text-orange-400" size={28} />}
-                    {index > 2 && <span className="font-black text-slate-300 text-xl">{index + 1}</span>}
-                  </div>
+        <div className="space-y-4">
+          {results.map((r) => (
+            <div
+              key={r.name}
+              className={`flex items-center p-6 rounded-3xl border-2 transition-all ${getCardBg(r.prizeTier)}`}
+            >
+              <div className="w-12 h-12 flex items-center justify-center rounded-2xl mr-4 bg-white/40 shadow-sm font-black">
+                {/* Still show the numeric rank (1, 2, 2, 4) for technical accuracy */}
+                {r.displayRank === 1 ? <Trophy className="text-yellow-700" /> : r.displayRank}
+              </div>
 
-                  {/* Participant Info */}
-                  <div className="flex-1">
-                    <h2 className={`text-xl font-black uppercase tracking-tight ${isTop3 ? 'text-slate-900' : 'text-slate-700'}`}>
-                      {r.name}
-                    </h2>
-                    <div className="flex items-center gap-3 mt-1">
-                      <span className="flex items-center gap-1 text-xs font-bold text-slate-400 uppercase tracking-widest">
-                        <Users size={12} /> {r.judgeCount} Consensus Sign-offs
-                      </span>
-                    </div>
-                  </div>
+              <div className="flex-1">
+                <h2 className={`text-lg font-bold uppercase ${getTextColor(r.prizeTier)}`}>
+                  {r.name}
+                </h2>
+                <p className={`text-[10px] font-bold uppercase opacity-60 ${getTextColor(r.prizeTier)}`}>
+                  Average Score
+                </p>
+              </div>
 
-                  {/* Score */}
-                  <div className="text-right">
-                    <div className={`text-3xl font-black ${index === 0 ? 'text-yellow-600' : 'text-indigo-950'}`}>
-                      {r.score.toFixed(1)}
-                    </div>
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Avg Points</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : selectedCat ? (
-          <div className="bg-white rounded-3xl p-20 shadow-sm text-center">
-            <Users className="mx-auto text-slate-200 mb-4" size={60} />
-            <h3 className="text-xl font-bold text-slate-800">No Finalized Scores Yet</h3>
-            <p className="text-slate-500 mt-2">Judges must sign off on participants before they appear here.</p>
-          </div>
-        ) : (
-          <div className="bg-indigo-50 border-2 border-dashed border-indigo-200 rounded-3xl p-20 text-center">
-            <h3 className="text-xl font-bold text-indigo-400">Select a category to view standings</h3>
+              <div className={`text-3xl font-black ${getTextColor(r.prizeTier)}`}>
+                {r.score.toFixed(1)}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {results.length > 0 && (
+          <div className="mt-10 p-6 bg-indigo-900 rounded-3xl text-white flex justify-between items-center">
+            <div>
+              <p className="text-indigo-300 text-xs font-bold uppercase tracking-widest">Status</p>
+              <h3 className="text-xl font-bold">{isFinalized ? "Final Standings Verified" : "Awaiting Verification"}</h3>
+            </div>
+            {isFinalized ? (
+              <div className="flex items-center gap-2 bg-green-500 px-4 py-2 rounded-xl font-bold">
+                <CheckCircle size={20} /> Verified
+              </div>
+            ) : (
+              <button className="flex items-center gap-2 bg-white text-indigo-900 px-6 py-3 rounded-xl font-bold hover:bg-indigo-50 transition">
+                <PenTool size={20} /> Sign Standings
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -31,7 +31,7 @@ function App() {
 
         {/* ONLY Admins can see the Full Leaderboard */}
         <Route path="/leaderboard" element={
-          <ProtectedRoute allowedRoles={['admin']}>
+          <ProtectedRoute allowedRoles={['admin', 'judge']}>
             <LeaderboardPage />
           </ProtectedRoute>
         } />
