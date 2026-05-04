@@ -110,15 +110,26 @@ export default function JudgingPage() {
   }
 
   const handleScoreChange = (pId: string, index: number, value: string) => {
-    let numValue = parseInt(value) || 0;
-    if (numValue > 25) numValue = 25;
-    if (numValue < 0) numValue = 0;
+    const val = Math.min(Math.max(parseInt(value) || 0, 0), 25);
 
     setScores(prev => {
-      const currentData = prev[pId] || { marks: [0, 0, 0, 0], is_finalized: false };
-      const newMarks = [...currentData.marks];
-      newMarks[index] = numValue;
-      return { ...prev, [pId]: { ...currentData, marks: newMarks } };
+      const current = prev[pId] || {};
+
+      // Safety check: standard oratorical usually needs 4 marks
+      const existingMarks = Array.isArray(current.marks) && current.marks.length > 0
+        ? current.marks
+        : new Array(4).fill(0);
+
+      const newMarks = [...existingMarks];
+      newMarks[index] = val;
+
+      return {
+        ...prev,
+        [pId]: {
+          ...current,
+          marks: newMarks
+        }
+      };
     });
   };
 
@@ -130,14 +141,20 @@ export default function JudgingPage() {
     const upsertData = participants.map(p => ({
       participant_id: p.id,
       judge_id: user?.id,
-      marks: scores[p.id]?.marks || [0, 0, 0, 0],
-      is_finalized: scores[p.id]?.is_finalized || false
+      marks: scores[p.id]?.marks || [],
+      // ADD THESE TWO LINES:
+      song_titles: scores[p.id]?.song_titles || ['', ''],
+      topic: scores[p.id]?.topic || '',
+      total_score: parseFloat(calculateAverage(p.id)),
+      is_finalized: false
     }));
 
-    const { error } = await supabase.from('scores').upsert(upsertData, { onConflict: 'participant_id, judge_id' });
+    const { error } = await supabase.from('scores').upsert(upsertData, {
+      onConflict: 'participant_id, judge_id'
+    });
 
     if (error) alert(error.message);
-    else alert("All progress saved as draft!");
+    else alert("Progress saved!");
     setIsSaving(false);
   };
 
@@ -152,7 +169,10 @@ export default function JudgingPage() {
     const finalizeData = participants.map(p => ({
       participant_id: p.id,
       judge_id: user?.id,
-      marks: scores[p.id]?.marks || [0, 0, 0, 0],
+      marks: scores[p.id]?.marks || [],
+      song_titles: scores[p.id]?.song_titles || [],
+      topic: scores[p.id]?.topic || '',
+      total_score: parseFloat(calculateAverage(p.id)),
       is_finalized: true,
       signed_name: signature
     }));
@@ -167,6 +187,79 @@ export default function JudgingPage() {
       alert(`Successfully signed off for ${participants.length} participants!`);
     }
     setIsSaving(false);
+  };
+
+  // Helper to calculate total average for Recital
+  const calculateAverage = (pId: string) => {
+    const data = scores[pId]?.marks || [];
+    if (data.length === 0) return 0;
+
+    const sum = data.reduce((a: number, b: number) => a + b, 0);
+    const isRecital = currentAssignment.categories.competition_name.toLowerCase().includes('recital');
+
+    // Oratorical should show the raw sum (e.g., 80), Recital shows the mean (e.g., 80.0)
+    return isRecital ? (sum / 2).toFixed(1) : sum;
+  };
+
+  const handleSongTitleChange = (pId: string, songIdx: number, title: string) => {
+    setScores(prev => {
+      const current = prev[pId] || {};
+      // Ensure we are working with an array of at least 2 strings
+      const currentTitles = Array.isArray(current.song_titles)
+        ? current.song_titles
+        : ['', ''];
+
+      const newTitles = [...currentTitles];
+      newTitles[songIdx] = title;
+
+      return {
+        ...prev,
+        [pId]: { ...current, song_titles: newTitles }
+      };
+    });
+  };
+
+  const handleRecitalScoreChange = (pId: string, songIdx: number, labelIdx: number, value: string) => {
+    const val = Math.min(Math.max(parseInt(value) || 0, 0), 25);
+
+    setScores(prev => {
+      // Ensure current exists and has a marks array
+      const current = prev[pId] || {};
+
+      // Safety check: if marks doesn't exist or isn't an array, create it
+      const existingMarks = Array.isArray(current.marks) && current.marks.length > 0
+        ? current.marks
+        : new Array(8).fill(0);
+
+      const newMarks = [...existingMarks];
+
+      // Offset: Song 1 uses 0-3, Song 2 uses 4-7
+      const actualIdx = (songIdx * 4) + labelIdx;
+      newMarks[actualIdx] = val;
+
+      return {
+        ...prev,
+        [pId]: {
+          ...current,
+          marks: newMarks
+        }
+      };
+    });
+  };
+
+  const handleTopicChange = (pId: string, value: string) => {
+    setScores(prev => {
+      const current = prev[pId] || {};
+      return {
+        ...prev,
+        [pId]: { ...current, topic: value }
+      };
+    });
+  };
+
+  const getRecitalMark = (pId: string, songIdx: number, labelIdx: number) => {
+    const marks = scores[pId]?.marks || [];
+    return marks[(songIdx * 4) + labelIdx] || 0;
   };
 
   const isClassLocked = participants.every(p => scores[p.id]?.is_finalized === true) && participants.length > 0;
@@ -222,27 +315,106 @@ export default function JudgingPage() {
 
       <div className="max-w-5xl mx-auto p-4 mt-6 space-y-4">
         {participants.map((p) => {
-          const scoreData = scores[p.id] || { marks: [0, 0, 0, 0], is_finalized: false };
+          const isRecital = currentAssignment.categories.competition_name.toLowerCase().includes('recital');
+
+          // 2. Get existing data or create a correctly sized default
+          const existingData = scores[p.id];
+
+          const scoreData = existingData || {
+            marks: new Array(isRecital ? 8 : 4).fill(0),
+            is_finalized: false,
+            topic: '',
+            song_titles: ['', '']
+          };
+
+          // 3. Safety Check: If data exists but marks is the wrong size or missing
+          const safeMarks = Array.isArray(scoreData.marks) && scoreData.marks.length > 0
+            ? scoreData.marks
+            : new Array(isRecital ? 8 : 4).fill(0);
+
           return (
-            <div key={p.id} className={`bg-white rounded-2xl shadow-sm border-2 transition-all ${scoreData.is_finalized ? 'border-green-100 opacity-75' : 'border-transparent'}`}>
+            <div key={p.id} className={`bg-white rounded-2xl shadow-sm border-2 mb-4 transition-all ${scoreData.is_finalized ? 'border-green-100' : 'border-transparent'}`}>
+              {/* HEADER SECTION */}
               <div className="p-4 flex justify-between items-center border-b border-slate-50">
-                <h2 className="font-black text-slate-800 uppercase">{p.name}</h2>
-                <div className="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg font-mono font-black">
-                  {scoreData.marks.reduce((a: any, b: any) => a + b, 0)}
+                <h2 className="font-black text-slate-800 uppercase tracking-tight">{p.name}</h2>
+                <div className="text-right">
+                  <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1">
+                    {isRecital ? 'Total Avg' : 'Total Score'}
+                  </p>
+                  <div className="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg font-mono font-black text-lg">
+                    {calculateAverage(p.id)}
+                  </div>
                 </div>
               </div>
-              <div className="p-4 grid grid-cols-4 gap-3">
-                {currentAssignment.categories.rubric_labels.map((label: string, index: number) => (
-                  <div key={label} className="space-y-1">
-                    <p className="text-[9px] uppercase font-bold text-slate-400 truncate">{label}</p>
-                    <input
-                      type="number" disabled={scoreData.is_finalized}
-                      value={scoreData.marks[index]}
-                      onChange={(e) => handleScoreChange(p.id, index, e.target.value)}
-                      className="w-full p-2 text-center text-xl font-black rounded-xl bg-slate-50 border-none outline-none focus:ring-2 focus:ring-indigo-500 disabled:text-slate-300"
-                    />
+
+              {/* INPUTS SECTION */}
+              <div className="p-4">
+                {isRecital ? (
+                  /* RECITAL: TWO SONG BOXES */
+                  <div className="space-y-6">
+                    {[0, 1].map((songIdx) => (
+                      <div key={songIdx} className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <div className="flex items-center gap-4 mb-4">
+                          <span className="bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded uppercase">Song {songIdx + 1}</span>
+                          <input
+                            type="text"
+                            placeholder="Song Title..."
+                            disabled={scoreData.is_finalized}
+                            value={scores[p.id]?.song_titles?.[songIdx] || ''}
+                            onChange={(e) => handleSongTitleChange(p.id, songIdx, e.target.value)}
+                            className="flex-1 bg-white border-none rounded-xl p-2 text-sm font-bold shadow-sm outline-none focus:ring-2 focus:ring-indigo-400"
+                          />
+                        </div>
+                        <div className="grid grid-cols-4 gap-3">
+                          {currentAssignment.categories.rubric_labels.map((label: string, labelIdx: number) => (
+                            <div key={label}>
+                              <p className="text-[9px] uppercase font-bold text-slate-400 mb-1 truncate">{label}</p>
+                              <input
+                                type="number"
+                                disabled={scoreData.is_finalized}
+                                value={getRecitalMark(p.id, songIdx, labelIdx)}
+                                onChange={(e) => handleRecitalScoreChange(p.id, songIdx, labelIdx, e.target.value)}
+                                className="w-full p-2 text-center text-lg font-black rounded-xl bg-white border-none shadow-sm focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                ) : (
+                  /* ORATORICAL: SINGLE ROW OF INPUTS + TOPIC BOX */
+                  <div className="space-y-4">
+                    {/* Topic Input Box */}
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex items-center gap-4">
+                      <span className="bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded uppercase shrink-0">Topic</span>
+                      <input
+                        type="text"
+                        placeholder="Enter Oratorical Topic..."
+                        disabled={scoreData.is_finalized}
+                        value={scores[p.id]?.topic || ''}
+                        onChange={(e) => handleTopicChange(p.id, e.target.value)}
+                        className="flex-1 bg-white border-none rounded-xl p-2 text-sm font-bold shadow-sm outline-none focus:ring-2 focus:ring-indigo-400"
+                      />
+                    </div>
+
+                    {/* Marks Grid */}
+                    <div className="grid grid-cols-4 gap-4">
+                      {currentAssignment.categories.rubric_labels.map((label: string, index: number) => (
+                        <div key={label}>
+                          <p className="text-[10px] uppercase font-bold text-slate-400 mb-2 truncate">{label}</p>
+                          <input
+                            type="number"
+                            disabled={scoreData.is_finalized}
+                            value={safeMarks[index] !== undefined ? safeMarks[index] : 0}
+                            onChange={(e) => handleScoreChange(p.id, index, e.target.value)}
+                            className="w-full p-4 text-center text-xl font-black rounded-2xl bg-slate-50 border-none outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           );
