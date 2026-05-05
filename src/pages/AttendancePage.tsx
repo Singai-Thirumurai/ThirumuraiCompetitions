@@ -7,13 +7,23 @@ export default function AttendancePage() {
   const [categories, setCategories] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  
+  const [lastSync, setLastSync] = useState(new Date());
+
   // Walk-in Form State
   const [newName, setNewName] = useState('');
   const [selectedCat, setSelectedCat] = useState('');
 
   useEffect(() => {
+    // 1. Initial fetch when page loads
     fetchData();
+
+    // 2. Set up the interval
+    const interval = setInterval(() => {
+      fetchData();
+    }, 15000);
+
+    // 3. Clean up
+    return () => clearInterval(interval);
   }, []);
 
   async function fetchData() {
@@ -22,7 +32,7 @@ export default function AttendancePage() {
       .from('participants')
       .select('*, categories(competition_name, class_name)')
       .order('name', { ascending: true });
-    
+
     // Fetch Categories (for the Walk-in Modal)
     const { data: cData } = await supabase
       .from('categories')
@@ -31,12 +41,26 @@ export default function AttendancePage() {
 
     setParticipants(pData || []);
     setCategories(cData || []);
+
+    setLastSync(new Date());
   }
 
   const toggleAttendance = async (id: string, currentStatus: boolean) => {
-    const newStatus = !currentStatus;
-    setParticipants(prev => prev.map(p => p.id === id ? { ...p, attended: newStatus } : p));
-    await supabase.from('participants').update({ attended: newStatus }).eq('id', id);
+    // Optional: Add a safety check for unmarking
+    if (currentStatus === true) {
+      const confirmUnmark = window.confirm("This participant is already marked PRESENT. Are you sure you want to unmark them?");
+      if (!confirmUnmark) return;
+    }
+
+    const { error } = await supabase
+      .from('participants')
+      .update({ attended: !currentStatus })
+      .eq('id', id);
+
+    if (!error) {
+      // Refresh immediately for the local user
+      fetchData();
+    }
   };
 
   const handleAddWalkIn = async (e: React.FormEvent) => {
@@ -57,7 +81,7 @@ export default function AttendancePage() {
     }
   };
 
-  const filtered = participants.filter(p => 
+  const filtered = participants.filter(p =>
     p.name?.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -73,9 +97,14 @@ export default function AttendancePage() {
         <div className="max-w-4xl mx-auto flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Thirumurai 2026</h1>
-            <p className="text-indigo-200 text-sm">Attendance Portal</p>
+            <div className="flex items-center gap-2 mt-1">
+              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+              <p className="text-indigo-200 text-xs font-mono uppercase tracking-widest">
+                Last Synced: {lastSync.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </p>
+            </div>
           </div>
-          <button 
+          <button
             onClick={() => setIsModalOpen(true)}
             className="flex items-center gap-2 bg-white text-indigo-900 px-4 py-2 rounded-lg font-bold hover:bg-indigo-50 transition"
           >
@@ -89,7 +118,7 @@ export default function AttendancePage() {
         <div className="bg-white p-4 rounded-2xl shadow-sm mb-6 flex flex-col md:flex-row gap-4 items-center">
           <div className="relative flex-1 w-full">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-            <input 
+            <input
               type="text"
               placeholder="Search by name..."
               value={search}
@@ -111,7 +140,7 @@ export default function AttendancePage() {
                 <h3 className={`font-bold text-lg ${p.attended ? "text-green-900" : "text-slate-800"}`}>{p.name}</h3>
                 <p className="text-xs text-slate-500 font-medium uppercase tracking-wider">{p.categories?.competition_name} — {p.categories?.class_name}</p>
               </div>
-              <button 
+              <button
                 onClick={() => toggleAttendance(p.id, p.attended)}
                 className={`px-6 py-2 rounded-xl font-bold transition-all ${p.attended ? "bg-green-600 text-white" : "bg-slate-100 text-slate-400 hover:bg-slate-200"}`}
               >
