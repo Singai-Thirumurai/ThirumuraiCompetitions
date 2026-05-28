@@ -26,6 +26,43 @@ export default function JudgingPage() {
     if (currentAssignment) fetchParticipants(currentAssignment.category_id);
   }, [currentAssignment]);
 
+  // 1. RESTORE FROM BACKUP ON MOUNT
+  useEffect(() => {
+    const backup = localStorage.getItem(`judging_backup_${currentAssignment?.category_id}`);
+    if (backup) {
+      try {
+        const parsedBackup = JSON.parse(backup);
+        // Merge backup into current scores state safely
+        setScores(prev => ({ ...prev, ...parsedBackup }));
+      } catch (e) {
+        console.error("Failed to restore score backups", e);
+      }
+    }
+  }, [currentAssignment, participants]); // Triggers when changing categories
+
+  // 2. BACK UP TO LOCALSTORAGE AUTOMATICALLY ON EVERY CHANGE
+  useEffect(() => {
+    if (Object.keys(scores).length > 0 && currentAssignment?.category_id) {
+      localStorage.setItem(
+        `judging_backup_${currentAssignment.category_id}`,
+        JSON.stringify(scores)
+      );
+    }
+  }, [scores, currentAssignment]);
+
+  useEffect(() => {
+  const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+    // Show warning only if there is data being held in scores state
+    if (Object.keys(scores).length > 0) {
+      e.preventDefault();
+      e.returnValue = "You have unsaved scores. Are you sure you want to leave?";
+    }
+  };
+
+  window.addEventListener("beforeunload", handleBeforeUnload);
+  return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+}, [scores]);
+
   async function fetchAssignments() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
@@ -176,7 +213,24 @@ export default function JudgingPage() {
           topic: s.topic
         };
       });
-      setScores(scoreMap);
+
+      // Look for an existing unsaved local draft in the browser storage
+      const localBackupRaw = localStorage.getItem(`judging_backup_${catId}`);
+      
+      if (localBackupRaw) {
+        try {
+          const parsedBackup = JSON.parse(localBackupRaw);
+          // Combine both: Local changes take absolute priority over server drafts!
+          const mergedScores = { ...scoreMap, ...parsedBackup };
+          setScores(mergedScores);
+        } catch (e) {
+          console.error("Failed to merge local backup", e);
+          setScores(scoreMap);
+        }
+      } else {
+        // Safe deployment: No backup exists, use clean database state
+        setScores(scoreMap);
+      }
     }
   }
 
@@ -218,7 +272,10 @@ export default function JudgingPage() {
     });
 
     if (error) alert(error.message);
-    else alert("Progress saved!");
+    else {
+      localStorage.removeItem(`judging_backup_${currentAssignment?.category_id}`);
+      alert("Progress saved!");
+    }
     setIsSaving(false);
   };
 
@@ -245,6 +302,7 @@ export default function JudgingPage() {
     if (error) {
       alert(error.message);
     } else {
+      localStorage.removeItem(`judging_backup_${currentAssignment?.category_id}`);
       setIsSignModalOpen(false);
       fetchParticipants(currentAssignment.category_id);
       alert(`Successfully signed off for ${participants.length} participants!`);
