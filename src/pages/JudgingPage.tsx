@@ -51,17 +51,17 @@ export default function JudgingPage() {
   }, [scores, currentAssignment]);
 
   useEffect(() => {
-  const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-    // Show warning only if there is data being held in scores state
-    if (Object.keys(scores).length > 0) {
-      e.preventDefault();
-      e.returnValue = "You have unsaved scores. Are you sure you want to leave?";
-    }
-  };
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Show warning only if there is data being held in scores state
+      if (Object.keys(scores).length > 0) {
+        e.preventDefault();
+        e.returnValue = "You have unsaved scores. Are you sure you want to leave?";
+      }
+    };
 
-  window.addEventListener("beforeunload", handleBeforeUnload);
-  return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-}, [scores]);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [scores]);
 
   async function fetchAssignments() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -202,7 +202,6 @@ export default function JudgingPage() {
       setAllJudgeScores(judgeScoresMap);
       setScores(scoreMap);
     } else {
-      // JUDGE VIEW: Simple map - each judge only sees their own scores
       const scoreMap: Record<string, any> = {};
       existingScores?.forEach(s => {
         scoreMap[s.participant_id] = {
@@ -210,13 +209,14 @@ export default function JudgingPage() {
           is_finalized: s.is_finalized,
           signed_name: s.signed_name,
           song_titles: s.song_titles,
-          topic: s.topic
+          topic: s.topic,
+          comment: s.comment // ADD THIS LINE
         };
       });
 
       // Look for an existing unsaved local draft in the browser storage
       const localBackupRaw = localStorage.getItem(`judging_backup_${catId}`);
-      
+
       if (localBackupRaw) {
         try {
           const parsedBackup = JSON.parse(localBackupRaw);
@@ -263,6 +263,7 @@ export default function JudgingPage() {
       marks: scores[p.id]?.marks || [],
       song_titles: scores[p.id]?.song_titles || ['', ''],
       topic: scores[p.id]?.topic || '',
+      comment: scores[p.id]?.comment || '', 
       total_score: parseFloat(calculateAverage(p.id)),
       is_finalized: false
     }));
@@ -292,6 +293,7 @@ export default function JudgingPage() {
       marks: scores[p.id]?.marks || [],
       song_titles: scores[p.id]?.song_titles || [],
       topic: scores[p.id]?.topic || '',
+      comment: scores[p.id]?.comment || '', 
       total_score: parseFloat(calculateAverage(p.id)),
       is_finalized: true,
       signed_name: signature
@@ -351,6 +353,16 @@ export default function JudgingPage() {
     setScores(prev => {
       const current = prev[pId] || {};
       return { ...prev, [pId]: { ...current, topic: value } };
+    });
+  };
+
+  const handleCommentChange = (pId: string, value: string) => {
+    setScores(prev => {
+      const current = prev[pId] || {};
+      return {
+        ...prev,
+        [pId]: { ...current, comment: value }
+      };
     });
   };
 
@@ -544,6 +556,19 @@ export default function JudgingPage() {
                     </div>
                   </div>
                 )}
+                <div className="mt-6 pt-4 border-t border-slate-100">
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">
+                    Judge's Feedback & Comments
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder={scoreData.is_finalized ? "No comments provided." : "Type constructive feedback or notes here..."}
+                    disabled={isDisabled}
+                    value={scores[p.id]?.comment || ''}
+                    onChange={(e) => handleCommentChange(p.id, e.target.value)}
+                    className="w-full p-3 bg-slate-50 text-slate-700 text-sm font-medium rounded-xl border-none outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 resize-none transition-all shadow-inner"
+                  />
+                </div>
               </div>
             </div>
           );

@@ -15,9 +15,9 @@ function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
 
-        {/* ONLY Clerks and Admins can see Attendance */}
+        {/* ONLY Clerks and Admins & Emceees can see Attendance */}
         <Route path="/attendance" element={
-          <ProtectedRoute allowedRoles={['admin', 'clerk']}>
+          <ProtectedRoute allowedRoles={['admin', 'clerk', 'emcee']}>
             <AttendancePage />
           </ProtectedRoute>
         } />
