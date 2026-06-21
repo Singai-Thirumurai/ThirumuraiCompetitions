@@ -235,13 +235,20 @@ export default function JudgingPage() {
   }
 
   const handleScoreChange = (pId: string, index: number, value: string) => {
-    const val = Math.min(Math.max(parseInt(value) || 0, 0), 25);
+    // Look up the exact string label using the index
+    const labelName = currentAssignment?.categories?.rubric_labels?.[index];
+    const maxMarksDict = currentAssignment?.categories?.max_marks || {};
+
+    // Get the dynamic limit from the dictionary, fallback to 25 if not defined
+    const maxAllowed = maxMarksDict[labelName] !== undefined ? Number(maxMarksDict[labelName]) : 25;
+    const val = Math.min(Math.max(parseInt(value) || 0, 0), maxAllowed);
 
     setScores(prev => {
       const current = prev[pId] || {};
+      const totalLabelsCount = currentAssignment?.categories?.rubric_labels?.length || 4;
       const existingMarks = Array.isArray(current.marks) && current.marks.length > 0
         ? current.marks
-        : new Array(4).fill(0);
+        : new Array(totalLabelsCount).fill(0);
 
       const newMarks = [...existingMarks];
       newMarks[index] = val;
@@ -253,6 +260,7 @@ export default function JudgingPage() {
     });
   };
 
+
   const saveAllDrafts = async () => {
     setIsSaving(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -263,7 +271,7 @@ export default function JudgingPage() {
       marks: scores[p.id]?.marks || [],
       song_titles: scores[p.id]?.song_titles || ['', ''],
       topic: scores[p.id]?.topic || '',
-      comment: scores[p.id]?.comment || '', 
+      comment: scores[p.id]?.comment || '',
       total_score: parseFloat(calculateAverage(p.id)),
       is_finalized: false
     }));
@@ -293,7 +301,7 @@ export default function JudgingPage() {
       marks: scores[p.id]?.marks || [],
       song_titles: scores[p.id]?.song_titles || [],
       topic: scores[p.id]?.topic || '',
-      comment: scores[p.id]?.comment || '', 
+      comment: scores[p.id]?.comment || '',
       total_score: parseFloat(calculateAverage(p.id)),
       is_finalized: true,
       signed_name: signature
@@ -333,7 +341,13 @@ export default function JudgingPage() {
   };
 
   const handleRecitalScoreChange = (pId: string, songIdx: number, labelIdx: number, value: string) => {
-    const val = Math.min(Math.max(parseInt(value) || 0, 0), 25);
+    // Look up the exact string label using the labelIdx
+    const labelName = currentAssignment?.categories?.rubric_labels?.[labelIdx];
+    const maxMarksDict = currentAssignment?.categories?.max_marks || {};
+
+    // Get the dynamic limit from the dictionary
+    const maxAllowed = maxMarksDict[labelName] !== undefined ? Number(maxMarksDict[labelName]) : 25;
+    const val = Math.min(Math.max(parseInt(value) || 0, 0), maxAllowed);
 
     setScores(prev => {
       const current = prev[pId] || {};
@@ -511,18 +525,24 @@ export default function JudgingPage() {
                           />
                         </div>
                         <div className="grid grid-cols-4 gap-3">
-                          {currentAssignment.categories.rubric_labels.map((label: string, labelIdx: number) => (
-                            <div key={label}>
-                              <p className="text-[9px] uppercase font-bold text-slate-400 mb-1 truncate">{label}</p>
-                              <input
-                                type="number"
-                                disabled={isDisabled}
-                                value={getRecitalMark(p.id, songIdx, labelIdx)}
-                                onChange={(e) => handleRecitalScoreChange(p.id, songIdx, labelIdx, e.target.value)}
-                                className="w-full p-2 text-center text-lg font-black rounded-xl bg-white border-none shadow-sm focus:ring-2 focus:ring-indigo-500"
-                              />
-                            </div>
-                          ))}
+                          {currentAssignment.categories.rubric_labels.map((label: string, labelIdx: number) => {
+                            const criteriaMax = currentAssignment?.categories?.max_marks?.[label] ?? 25;
+                            return (
+                              <div key={label}>
+                                <p className="text-[9px] uppercase font-bold text-slate-400 mb-1 truncate">
+                                  {label} <span className="text-indigo-500 font-mono text-[8px]">({criteriaMax})</span>
+                                </p>
+                                <input
+                                  type="number"
+                                  placeholder={`0-${criteriaMax}`}
+                                  disabled={isDisabled}
+                                  value={getRecitalMark(p.id, songIdx, labelIdx)}
+                                  onChange={(e) => handleRecitalScoreChange(p.id, songIdx, labelIdx, e.target.value)}
+                                  className="w-full p-2 text-center text-lg font-black rounded-xl bg-white border-none shadow-sm focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     ))}
@@ -541,18 +561,24 @@ export default function JudgingPage() {
                       />
                     </div>
                     <div className="grid grid-cols-4 gap-4">
-                      {currentAssignment.categories.rubric_labels.map((label: string, index: number) => (
-                        <div key={label}>
-                          <p className="text-[10px] uppercase font-bold text-slate-400 mb-2 truncate">{label}</p>
-                          <input
-                            type="number"
-                            disabled={isDisabled}
-                            value={safeMarks[index] !== undefined ? safeMarks[index] : 0}
-                            onChange={(e) => handleScoreChange(p.id, index, e.target.value)}
-                            className="w-full p-4 text-center text-xl font-black rounded-2xl bg-slate-50 border-none outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-                          />
-                        </div>
-                      ))}
+                      {currentAssignment.categories.rubric_labels.map((label: string, index: number) => {
+                        const criteriaMax = currentAssignment?.categories?.max_marks?.[label] ?? 25;
+                        return (
+                          <div key={label}>
+                            <p className="text-[10px] uppercase font-bold text-slate-400 mb-2 truncate">
+                              {label} <span className="text-indigo-500 font-mono text-[9px]">({criteriaMax})</span>
+                            </p>
+                            <input
+                              type="number"
+                              placeholder={`0-${criteriaMax}`}
+                              disabled={isDisabled}
+                              value={safeMarks[index] !== undefined ? safeMarks[index] : 0}
+                              onChange={(e) => handleScoreChange(p.id, index, e.target.value)}
+                              className="w-full p-4 text-center text-xl font-black rounded-2xl bg-slate-50 border-none outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
