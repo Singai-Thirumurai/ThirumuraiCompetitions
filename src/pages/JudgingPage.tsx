@@ -26,42 +26,6 @@ export default function JudgingPage() {
     if (currentAssignment) fetchParticipants(currentAssignment.category_id);
   }, [currentAssignment]);
 
-  // 1. RESTORE FROM BACKUP ON MOUNT
-  useEffect(() => {
-    const backup = localStorage.getItem(`judging_backup_${currentAssignment?.category_id}`);
-    if (backup) {
-      try {
-        const parsedBackup = JSON.parse(backup);
-        // Merge backup into current scores state safely
-        setScores(prev => ({ ...prev, ...parsedBackup }));
-      } catch (e) {
-        console.error("Failed to restore score backups", e);
-      }
-    }
-  }, [currentAssignment, participants]); // Triggers when changing categories
-
-  // 2. BACK UP TO LOCALSTORAGE AUTOMATICALLY ON EVERY CHANGE
-  useEffect(() => {
-    if (Object.keys(scores).length > 0 && currentAssignment?.category_id) {
-      localStorage.setItem(
-        `judging_backup_${currentAssignment.category_id}`,
-        JSON.stringify(scores)
-      );
-    }
-  }, [scores, currentAssignment]);
-
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // Show warning only if there is data being held in scores state
-      if (Object.keys(scores).length > 0) {
-        e.preventDefault();
-        e.returnValue = "You have unsaved scores. Are you sure you want to leave?";
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [scores]);
 
   async function fetchAssignments() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -228,7 +192,18 @@ export default function JudgingPage() {
           setScores(scoreMap);
         }
       } else {
-        // Safe deployment: No backup exists, use clean database state
+        const scoreMap: Record<string, any> = {};
+        existingScores?.forEach(s => {
+          scoreMap[s.participant_id] = {
+            marks: s.marks,
+            is_finalized: s.is_finalized,
+            signed_name: s.signed_name,
+            song_titles: s.song_titles,
+            topic: s.topic,
+            comment: s.comment
+          };
+        });
+
         setScores(scoreMap);
       }
     }
@@ -282,7 +257,6 @@ export default function JudgingPage() {
 
     if (error) alert(error.message);
     else {
-      localStorage.removeItem(`judging_backup_${currentAssignment?.category_id}`);
       alert("Progress saved!");
     }
     setIsSaving(false);
@@ -312,7 +286,6 @@ export default function JudgingPage() {
     if (error) {
       alert(error.message);
     } else {
-      localStorage.removeItem(`judging_backup_${currentAssignment?.category_id}`);
       setIsSignModalOpen(false);
       fetchParticipants(currentAssignment.category_id);
       alert(`Successfully signed off for ${participants.length} participants!`);

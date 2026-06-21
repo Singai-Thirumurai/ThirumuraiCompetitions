@@ -40,32 +40,97 @@ export default function LeaderboardPage() {
     if (catData?.length === 1) setSelectedCat(catData[0].id);
   }
 
+  // async function fetchRankings(catId: string) {
+  //   const { data } = await supabase
+  //     .from('participants')
+  //     .select('name, scores(total_score, is_finalized, signed_name)')
+  //     .eq('category_id', catId);
+
+  //   if (data) {
+  //     const rawResults = data.map(p => {
+  //       const finalized = p.scores?.filter((s: any) => s.is_finalized) || [];
+  //       const avg = finalized.length > 0 ? finalized.reduce((a: any, b: any) => a + b.total_score, 0) / finalized.length : 0;
+  //       return { name: p.name, score: avg };
+  //     }).sort((a, b) => b.score - a.score);
+
+  //     // LOGIC: Calculate Rank (1224) and Prize Tier (1223)
+  //     let currentRank = 0;
+  //     let currentPrizeTier = 0;
+  //     let lastScore = -1;
+
+  //     const rankedResults = rawResults.map((item, index) => {
+  //       if (item.score !== lastScore) {
+  //         // Score changed! Move to next prize tier and actual rank
+  //         currentPrizeTier++;
+  //         currentRank = index + 1;
+  //       }
+  //       // If score is the same, currentPrizeTier and currentRank stay as they were
+
+  //       lastScore = item.score;
+
+  //       return {
+  //         ...item,
+  //         displayRank: currentRank,
+  //         prizeTier: currentPrizeTier
+  //       };
+  //     });
+
+  //     setResults(rankedResults);
+  //     setIsFinalized(data[0]?.scores?.some((s: any) => s.is_finalized));
+  //   }
+  // }
+
   async function fetchRankings(catId: string) {
-    const { data } = await supabase
+    // 1. Get the current logged-in user information and profile details
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    // 2. Query participants and pull scores records
+    let scoreQuery = supabase
       .from('participants')
-      .select('name, scores(total_score, is_finalized, signed_name)')
+      .select('name, scores(total_score, is_finalized, signed_name, judge_id)')
       .eq('category_id', catId);
+
+    // If it's a judge, let database filter the scores early if needed, 
+    // but filtering in memory handles empty states elegantly.
+    const { data } = await scoreQuery;
 
     if (data) {
       const rawResults = data.map(p => {
-        const finalized = p.scores?.filter((s: any) => s.is_finalized) || [];
-        const avg = finalized.length > 0 ? finalized.reduce((a: any, b: any) => a + b.total_score, 0) / finalized.length : 0;
-        return { name: p.name, score: avg };
+        const pScores = p.scores || [];
+        let scoreToUse = 0;
+
+        if (profile?.role === 'judge') {
+          // JUDGE: Filter down to ONLY this judge's score row (whether it is draft or finalized!)
+          const judgeSpecificScore = pScores.find((s: any) => s.judge_id === user.id);
+          scoreToUse = judgeSpecificScore ? judgeSpecificScore.total_score : 0;
+        } else {
+          // ADMIN / CLERK: Keep your master leaderboard logic (average across all FINALIZED scores)
+          const finalized = pScores.filter((s: any) => s.is_finalized) || [];
+          scoreToUse = finalized.length > 0 
+            ? finalized.reduce((a: any, b: any) => a + b.total_score, 0) / finalized.length 
+            : 0;
+        }
+
+        return { name: p.name, score: scoreToUse };
       }).sort((a, b) => b.score - a.score);
 
-      // LOGIC: Calculate Rank (1224) and Prize Tier (1223)
+      // 3. Calculate Rank (1224) and Prize Tier (1223)
       let currentRank = 0;
       let currentPrizeTier = 0;
       let lastScore = -1;
 
       const rankedResults = rawResults.map((item, index) => {
         if (item.score !== lastScore) {
-          // Score changed! Move to next prize tier and actual rank
           currentPrizeTier++;
           currentRank = index + 1;
         }
-        // If score is the same, currentPrizeTier and currentRank stay as they were
-
         lastScore = item.score;
 
         return {
@@ -76,7 +141,16 @@ export default function LeaderboardPage() {
       });
 
       setResults(rankedResults);
-      setIsFinalized(data[0]?.scores?.some((s: any) => s.is_finalized));
+
+      // Adjust the footer verification status display card dynamically
+      if (profile?.role === 'judge') {
+        const currentJudgeFinalized = data.some(p => 
+          p.scores?.some((s: any) => s.judge_id === user.id && s.is_finalized)
+        );
+        setIsFinalized(currentJudgeFinalized);
+      } else {
+        setIsFinalized(data[0]?.scores?.some((s: any) => s.is_finalized) || false);
+      }
     }
   }
 
