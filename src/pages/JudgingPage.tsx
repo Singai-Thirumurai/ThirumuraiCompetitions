@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../api/supabase';
 import { ClipboardList, Save, CheckCircle2, X, PenTool, AlertCircle, Users, Download } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { sortCategories } from '../utils/sortCategories';
 
 export default function JudgingPage() {
   const [allAssignments, setAllAssignments] = useState<any[]>([]);
@@ -72,7 +73,8 @@ export default function JudgingPage() {
 
       if (error) console.error("Admin fetch error:", error);
 
-      catData = data?.map(cat => ({
+      const sorted = sortCategories(data || []);
+      catData = sorted.map(cat => ({
         id: cat.id,
         category_id: cat.id,
         categories: cat
@@ -83,7 +85,12 @@ export default function JudgingPage() {
         .select('*, categories(*)')
         .eq('judge_id', user.id);
 
-      catData = data;
+      if (data) {
+        const sorted = sortCategories(data.map(d => ({ ...d.categories, _orig: d })));
+        catData = sorted.map((s: any) => s._orig);
+      } else {
+        catData = data;
+      }
     }
 
     if (catData && catData.length > 0) {

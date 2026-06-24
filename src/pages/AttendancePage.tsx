@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../api/supabase';
 import { Search, UserPlus, X, Building2, Mail } from 'lucide-react';
+import { sortCategories } from '../utils/sortCategories';
 
 export default function AttendancePage() {
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -45,11 +46,10 @@ export default function AttendancePage() {
 
     const { data: cData } = await supabase
       .from('categories')
-      .select('*')
-      .order('competition_name', { ascending: true });
+      .select('*');
 
     setParticipants(pData || []);
-    setCategories(cData || []);
+    setCategories(sortCategories(cData || []));
     setLastSync(new Date());
   }
 
@@ -96,11 +96,17 @@ export default function AttendancePage() {
   };
 
   // 1. Get unique list of SPECIFIC competition sheets for the Tab Row items
+  const uniqueCatObjs = Array.from(
+    new Map(
+      participants
+        .filter(p => p.categories)
+        .map(p => [`${p.categories.competition_name}__${p.categories.class_name}`, p.categories])
+    ).values()
+  );
+  const sortedCatObjs = sortCategories(uniqueCatObjs);
   const uniqueCompetitions = [
     'ALL',
-    ...new Set(participants.map(p =>
-      p.categories ? `${p.categories.competition_name} — ${p.categories.class_name}` : ''
-    ).filter(Boolean))
+    ...sortedCatObjs.map(c => `${c.competition_name} — ${c.class_name}`)
   ];
 
   // 2. Filtering Logic: Combines Search text input AND specific Tab selection criteria

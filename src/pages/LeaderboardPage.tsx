@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../api/supabase';
 import { Trophy, Medal, Award, CheckCircle, PenTool } from 'lucide-react';
+import { sortCategories } from '../utils/sortCategories';
 
 export default function LeaderboardPage() {
   const [results, setResults] = useState<any[]>([]);
@@ -32,11 +33,8 @@ export default function LeaderboardPage() {
       query = query.in('id', catIds);
     }
 
-    const { data: catData } = await query
-      .order('competition_name', { ascending: true })
-      .order('class_name', { ascending: true });
-
-    setCategories(catData || []);
+    const { data: catData } = await query;
+    setCategories(sortCategories(catData || []));
     if (catData?.length === 1) setSelectedCat(catData[0].id);
   }
 
