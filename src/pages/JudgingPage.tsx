@@ -20,14 +20,27 @@ export default function JudgingPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const [selectedJudgeTab, setSelectedJudgeTab] = useState<string>('MASTER_AVG');
+  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
-    // Clear any stale per-category localStorage drafts left over from before localStorage was removed
     Object.keys(localStorage)
       .filter(k => k.startsWith('judging_backup_'))
       .forEach(k => localStorage.removeItem(k));
     fetchAssignments();
   }, []);
+
+  // Warn judges on refresh/close when they have unsaved changes
+  useEffect(() => {
+    if (userRole === 'admin') return;
+    const handler = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isDirty, userRole]);
 
   // useEffect(() => {
   //   if (currentAssignment) fetchParticipants(currentAssignment.category_id);
@@ -85,7 +98,8 @@ export default function JudgingPage() {
       .from('participants')
       .select('*')
       .eq('category_id', catId)
-      .eq('attended', true);
+      .eq('attended', true)
+      .order('name', { ascending: true });
 
     const participantList = pData || [];
     setParticipants(participantList);
@@ -197,6 +211,7 @@ export default function JudgingPage() {
   }
 
   const handleScoreChange = (pId: string, index: number, value: string) => {
+    setIsDirty(true);
     // Look up the exact string label using the index
     const labelName = currentAssignment?.categories?.rubric_labels?.[index];
     const maxMarksDict = currentAssignment?.categories?.max_marks || {};
@@ -244,6 +259,7 @@ export default function JudgingPage() {
 
     if (error) alert(error.message);
     else {
+      setIsDirty(false);
       alert("Progress saved!");
     }
     setIsSaving(false);
@@ -273,6 +289,7 @@ export default function JudgingPage() {
     if (error) {
       alert(error.message);
     } else {
+      setIsDirty(false);
       setIsSignModalOpen(false);
       fetchParticipants(currentAssignment.category_id);
       alert(`Successfully signed off for ${participants.length} participants!`);
@@ -396,6 +413,7 @@ export default function JudgingPage() {
   };
 
   const handleSongTitleChange = (pId: string, songIdx: number, title: string) => {
+    setIsDirty(true);
     setScores(prev => {
       const current = prev[pId] || {};
       const currentTitles = Array.isArray(current.song_titles) ? current.song_titles : ['', ''];
@@ -406,6 +424,7 @@ export default function JudgingPage() {
   };
 
   const handleRecitalScoreChange = (pId: string, songIdx: number, labelIdx: number, value: string) => {
+    setIsDirty(true);
     // Look up the exact string label using the labelIdx
     const labelName = currentAssignment?.categories?.rubric_labels?.[labelIdx];
     const maxMarksDict = currentAssignment?.categories?.max_marks || {};
@@ -429,6 +448,7 @@ export default function JudgingPage() {
   };
 
   const handleTopicChange = (pId: string, value: string) => {
+    setIsDirty(true);
     setScores(prev => {
       const current = prev[pId] || {};
       return { ...prev, [pId]: { ...current, topic: value } };
@@ -436,6 +456,7 @@ export default function JudgingPage() {
   };
 
   const handleCommentChange = (pId: string, value: string) => {
+    setIsDirty(true);
     setScores(prev => {
       const current = prev[pId] || {};
       return {
@@ -533,6 +554,15 @@ export default function JudgingPage() {
         </div>
       </div>
 
+      {isDirty && userRole !== 'admin' && (
+        <div className="bg-red-600 text-white px-4 py-4 flex items-center justify-center gap-3 shadow-lg">
+          <AlertCircle size={24} className="shrink-0" />
+          <p className="text-base font-black uppercase tracking-wide text-center">
+            ⚠️ You have unsaved changes! Click <span className="underline underline-offset-2">"Save All Drafts"</span> before refreshing or switching tabs — your scores will be lost otherwise.
+          </p>
+        </div>
+      )}
+
       <div className="max-w-5xl mx-auto p-4 mt-6 space-y-4">
         {userRole === 'admin' && participants.length > 0 && (
           <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-2 overflow-x-auto">
@@ -614,7 +644,9 @@ export default function JudgingPage() {
             }
           }
 
-          const safeMarks = scoreData.marks;
+          const safeMarks = Array.isArray(scoreData.marks) && scoreData.marks.length > 0
+            ? scoreData.marks
+            : new Array(isRecital ? 8 : 4).fill(0);
           const isDisabled = userRole === 'admin' || scoreData.is_finalized;
           
           
