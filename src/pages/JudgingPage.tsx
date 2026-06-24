@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../api/supabase';
-import { ClipboardList, Save, CheckCircle2, X, PenTool, AlertCircle, Users } from 'lucide-react';
+import { ClipboardList, Save, CheckCircle2, X, PenTool, AlertCircle, Users, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 export default function JudgingPage() {
   const [allAssignments, setAllAssignments] = useState<any[]>([]);
@@ -18,13 +19,26 @@ export default function JudgingPage() {
   const [signature, setSignature] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
+  const [selectedJudgeTab, setSelectedJudgeTab] = useState<string>('MASTER_AVG');
+
   useEffect(() => {
+    // Clear any stale per-category localStorage drafts left over from before localStorage was removed
+    Object.keys(localStorage)
+      .filter(k => k.startsWith('judging_backup_'))
+      .forEach(k => localStorage.removeItem(k));
     fetchAssignments();
   }, []);
 
+  // useEffect(() => {
+  //   if (currentAssignment) fetchParticipants(currentAssignment.category_id);
+  // }, [currentAssignment]);
+
   useEffect(() => {
-    if (currentAssignment) fetchParticipants(currentAssignment.category_id);
-  }, [currentAssignment]);
+  if (currentAssignment) {
+    setSelectedJudgeTab('MASTER_AVG'); // Reset tab back to summary view
+    fetchParticipants(currentAssignment.category_id);
+  }
+}, [currentAssignment]);
 
 
   async function fetchAssignments() {
@@ -115,7 +129,8 @@ export default function JudgingPage() {
           is_finalized: s.is_finalized,
           signed_name: s.signed_name,
           song_titles: s.song_titles,
-          topic: s.topic
+          topic: s.topic,
+          comment: s.comment
         });
       });
 
@@ -174,38 +189,10 @@ export default function JudgingPage() {
           signed_name: s.signed_name,
           song_titles: s.song_titles,
           topic: s.topic,
-          comment: s.comment // ADD THIS LINE
+          comment: s.comment
         };
       });
-
-      // Look for an existing unsaved local draft in the browser storage
-      const localBackupRaw = localStorage.getItem(`judging_backup_${catId}`);
-
-      if (localBackupRaw) {
-        try {
-          const parsedBackup = JSON.parse(localBackupRaw);
-          // Combine both: Local changes take absolute priority over server drafts!
-          const mergedScores = { ...scoreMap, ...parsedBackup };
-          setScores(mergedScores);
-        } catch (e) {
-          console.error("Failed to merge local backup", e);
-          setScores(scoreMap);
-        }
-      } else {
-        const scoreMap: Record<string, any> = {};
-        existingScores?.forEach(s => {
-          scoreMap[s.participant_id] = {
-            marks: s.marks,
-            is_finalized: s.is_finalized,
-            signed_name: s.signed_name,
-            song_titles: s.song_titles,
-            topic: s.topic,
-            comment: s.comment
-          };
-        });
-
-        setScores(scoreMap);
-      }
+      setScores(scoreMap);
     }
   }
 
@@ -293,6 +280,111 @@ export default function JudgingPage() {
     setIsSaving(false);
   };
 
+  const exportToExcel = async () => {
+    // 2 queries total for the entire export
+    const [{ data: allParticipants }, { data: allScores }] = await Promise.all([
+      supabase.from('participants').select('id, name, temple, category_id').eq('attended', true),
+      supabase.from('scores').select('participant_id, judge_id, marks, total_score, is_finalized, signed_name, song_titles, topic, comment')
+    ]);
+
+    const participantsByCategory: Record<string, any[]> = {};
+    allParticipants?.forEach(p => {
+      if (!participantsByCategory[p.category_id]) participantsByCategory[p.category_id] = [];
+      participantsByCategory[p.category_id].push(p);
+    });
+
+    const scoresByParticipant: Record<string, any[]> = {};
+    allScores?.forEach(s => {
+      if (!scoresByParticipant[s.participant_id]) scoresByParticipant[s.participant_id] = [];
+      scoresByParticipant[s.participant_id].push(s);
+    });
+
+    const wb = XLSX.utils.book_new();
+
+    for (const assignment of allAssignments) {
+      const cat = assignment.categories;
+      const catId = assignment.category_id;
+      const catParticipants = [...(participantsByCategory[catId] || [])].sort((a, b) => a.name.localeCompare(b.name));
+      const rubricLabels: string[] = cat.rubric_labels || [];
+      const isRecital = cat.competition_name.toLowerCase().includes('recital');
+
+      // Build ordered judge list for this category
+      const judgeMap = new Map<string, string>();
+      catParticipants.forEach(p => {
+        (scoresByParticipant[p.id] || []).forEach((s: any) => {
+          if (!judgeMap.has(s.judge_id)) {
+            judgeMap.set(s.judge_id, s.signed_name || `Judge ${judgeMap.size + 1}`);
+          }
+        });
+      });
+      const judges = Array.from(judgeMap.entries());
+
+      // Build header row
+      const headers: string[] = ['Name', 'Temple'];
+      judges.forEach(([, jName]) => {
+        if (isRecital) {
+          [1, 2].forEach(songNum => {
+            rubricLabels.forEach(label => headers.push(`${jName} - Song ${songNum}: ${label}`));
+          });
+        } else {
+          rubricLabels.forEach(label => headers.push(`${jName} - ${label}`));
+        }
+        headers.push(`${jName} Total`);
+        headers.push(`${jName} Status`);
+      });
+      headers.push('Master Average');
+      judges.forEach(([, jName]) => headers.push(`${jName} Comments`));
+
+      // Build data rows
+      const rows: any[][] = [headers];
+      catParticipants.forEach(p => {
+        const pScores = scoresByParticipant[p.id] || [];
+        const row: any[] = [p.name, p.temple || ''];
+        const finalizedScores: any[] = [];
+
+        judges.forEach(([judgeId]) => {
+          const js = pScores.find((s: any) => s.judge_id === judgeId);
+          const marks: number[] = js?.marks || [];
+          if (isRecital) {
+            [0, 1].forEach(songIdx => {
+              rubricLabels.forEach((_: string, li: number) => row.push(marks[(songIdx * 4) + li] ?? 0));
+            });
+          } else {
+            rubricLabels.forEach((_: string, li: number) => row.push(marks[li] ?? 0));
+          }
+          row.push(js?.total_score ?? '');
+          row.push(js?.is_finalized ? 'Finalized' : js ? 'Draft' : 'Not Started');
+          if (js?.is_finalized) finalizedScores.push(js);
+        });
+
+        if (finalizedScores.length > 0) {
+          const avg = finalizedScores.reduce((sum: number, s: any) => sum + (s.total_score || 0), 0) / finalizedScores.length;
+          row.push(Math.round(avg * 10) / 10);
+        } else {
+          row.push('');
+        }
+
+        judges.forEach(([judgeId]) => {
+          const js = pScores.find((s: any) => s.judge_id === judgeId);
+          row.push(js?.comment || '');
+        });
+
+        rows.push(row);
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+
+      // Basic column widths
+      ws['!cols'] = headers.map((h: string) => ({ wch: Math.max(h.length + 2, 14) }));
+
+      const sheetName = `${cat.competition_name} - ${cat.class_name}`.slice(0, 31);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    }
+
+    const date = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `TM2026_Judging_${date}.xlsx`);
+  };
+
   const calculateAverage = (pId: string) => {
     const data = scores[pId]?.marks || [];
     if (data.length === 0) return 0;
@@ -366,6 +458,18 @@ export default function JudgingPage() {
 
   if (loading) return <div className="p-10 text-center font-bold">Loading...</div>;
 
+  // Build a deduplicated list of judges from allJudgeScores
+  const uniqueJudges: Array<{ id: string; name: string }> = [];
+  const seenJudgeIds = new Set<string>();
+  let judgeCounter = 0;
+  Object.values(allJudgeScores).flat().forEach((s: any) => {
+    if (!seenJudgeIds.has(s.judge_id)) {
+      seenJudgeIds.add(s.judge_id);
+      judgeCounter++;
+      uniqueJudges.push({ id: s.judge_id, name: s.signed_name || `Judge ${judgeCounter}` });
+    }
+  });
+
   return (
     <div className="min-h-screen bg-slate-50 pb-32">
       <div className="bg-indigo-900 text-white shadow-lg sticky top-0 z-50">
@@ -391,8 +495,16 @@ export default function JudgingPage() {
                     </button>
                   )}
                   {userRole === 'admin' && (
-                    <div className="flex items-center gap-2 bg-yellow-500/20 px-4 py-2 rounded-xl text-yellow-200 text-sm font-bold border border-yellow-500/30">
-                      <Users size={16} /> Admin View (Read-Only)
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 bg-yellow-500/20 px-4 py-2 rounded-xl text-yellow-200 text-sm font-bold border border-yellow-500/30">
+                        <Users size={16} /> Admin View (Read-Only)
+                      </div>
+                      <button
+                        onClick={exportToExcel}
+                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 rounded-xl text-sm font-bold hover:bg-emerald-500 transition text-white"
+                      >
+                        <Download size={16} /> Export Excel
+                      </button>
                     </div>
                   )}
                 </>
@@ -422,23 +534,90 @@ export default function JudgingPage() {
       </div>
 
       <div className="max-w-5xl mx-auto p-4 mt-6 space-y-4">
+        {userRole === 'admin' && participants.length > 0 && (
+          <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-2 overflow-x-auto">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider px-2 shrink-0">View Filter:</span>
+            
+            <button
+              onClick={() => setSelectedJudgeTab('MASTER_AVG')}
+              className={`px-4 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                selectedJudgeTab === 'MASTER_AVG'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              📊 Master Averages
+            </button>
+
+            {uniqueJudges.map((judge) => (
+              <button
+                key={judge.id}
+                onClick={() => setSelectedJudgeTab(judge.id)}
+                className={`px-4 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                  selectedJudgeTab === judge.id
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                👨‍⚖️ {judge.name}
+              </button>
+            ))}
+          </div>
+        )}
+        
         {participants.map((p) => {
           const isRecital = currentAssignment.categories.competition_name.toLowerCase().includes('recital');
 
-          const existingData = scores[p.id];
-          const scoreData = existingData || {
+          // const existingData = scores[p.id];
+          // const scoreData = existingData || {
+          //   marks: new Array(isRecital ? 8 : 4).fill(0),
+          //   is_finalized: false,
+          //   topic: '',
+          //   song_titles: ['', '']
+          // };
+
+          // const safeMarks = Array.isArray(scoreData.marks) && scoreData.marks.length > 0
+          //   ? scoreData.marks
+          //   : new Array(isRecital ? 8 : 4).fill(0);
+
+          // const isDisabled = userRole === 'admin' || scoreData.is_finalized;
+
+          let scoreData = scores[p.id] || {
             marks: new Array(isRecital ? 8 : 4).fill(0),
             is_finalized: false,
             topic: '',
-            song_titles: ['', '']
+            song_titles: ['', ''],
+            comment: ''
           };
 
-          const safeMarks = Array.isArray(scoreData.marks) && scoreData.marks.length > 0
-            ? scoreData.marks
-            : new Array(isRecital ? 8 : 4).fill(0);
+          if (userRole === 'admin' && selectedJudgeTab !== 'MASTER_AVG') {
+            const specificJudgeRow = allJudgeScores[p.id]?.find((s: any) => s.judge_id === selectedJudgeTab);
+            if (specificJudgeRow) {
+              scoreData = {
+                marks: specificJudgeRow.marks || new Array(isRecital ? 8 : 4).fill(0),
+                is_finalized: specificJudgeRow.is_finalized,
+                topic: specificJudgeRow.topic || '',
+                song_titles: specificJudgeRow.song_titles || ['', ''],
+                comment: specificJudgeRow.comment || '',
+                judge_count: scores[p.id]?.judge_count,
+                total_judges: scores[p.id]?.total_judges,
+                signed_name: specificJudgeRow.signed_name
+              };
+            } else {
+              scoreData = {
+                marks: new Array(isRecital ? 8 : 4).fill(0),
+                is_finalized: false,
+                topic: '',
+                song_titles: ['', ''],
+                comment: 'No draft submitted by this judge.'
+              };
+            }
+          }
 
+          const safeMarks = scoreData.marks;
           const isDisabled = userRole === 'admin' || scoreData.is_finalized;
-
+          
+          
           return (
             <div key={p.id} className={`bg-white rounded-2xl shadow-sm border-2 mb-4 transition-all ${scoreData.is_finalized ? 'border-green-100' : 'border-transparent'}`}>
               {/* HEADER SECTION */}
@@ -460,7 +639,12 @@ export default function JudgingPage() {
                     {userRole === 'admin' ? 'Avg Score' : isRecital ? 'Total Avg' : 'Total Score'}
                   </p>
                   <div className="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg font-mono font-black text-lg">
-                    {calculateAverage(p.id)}
+                    {userRole === 'admin' && selectedJudgeTab !== 'MASTER_AVG'
+                      ? (isRecital 
+                          ? (safeMarks.reduce((a: number, b: number) => a + b, 0) / 2).toFixed(1) 
+                          : safeMarks.reduce((a: number, b: number) => a + b, 0))
+                      : calculateAverage(p.id)
+                    }
                   </div>
                 </div>
               </div>
@@ -492,7 +676,7 @@ export default function JudgingPage() {
                             type="text"
                             placeholder="Song Title..."
                             disabled={isDisabled}
-                            value={scores[p.id]?.song_titles?.[songIdx] || ''}
+                            value={scoreData.song_titles?.[songIdx] || ''}
                             onChange={(e) => handleSongTitleChange(p.id, songIdx, e.target.value)}
                             className="flex-1 bg-white border-none rounded-xl p-2 text-sm font-bold shadow-sm outline-none focus:ring-2 focus:ring-indigo-400"
                           />
@@ -509,7 +693,7 @@ export default function JudgingPage() {
                                   type="number"
                                   placeholder={`0-${criteriaMax}`}
                                   disabled={isDisabled}
-                                  value={getRecitalMark(p.id, songIdx, labelIdx)}
+                                  value={safeMarks[(songIdx * 4) + labelIdx] ?? 0}
                                   onChange={(e) => handleRecitalScoreChange(p.id, songIdx, labelIdx, e.target.value)}
                                   className="w-full p-2 text-center text-lg font-black rounded-xl bg-white border-none shadow-sm focus:ring-2 focus:ring-indigo-500"
                                 />
@@ -528,7 +712,7 @@ export default function JudgingPage() {
                         type="text"
                         placeholder="Enter Oratorical Topic..."
                         disabled={isDisabled}
-                        value={scores[p.id]?.topic || ''}
+                        value={scoreData.topic || ''}
                         onChange={(e) => handleTopicChange(p.id, e.target.value)}
                         className="flex-1 bg-white border-none rounded-xl p-2 text-sm font-bold shadow-sm outline-none focus:ring-2 focus:ring-indigo-400"
                       />
@@ -559,14 +743,20 @@ export default function JudgingPage() {
                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">
                     Judge's Feedback & Comments
                   </label>
-                  <textarea
-                    rows={2}
-                    placeholder={scoreData.is_finalized ? "No comments provided." : "Type constructive feedback or notes here..."}
-                    disabled={isDisabled}
-                    value={scores[p.id]?.comment || ''}
-                    onChange={(e) => handleCommentChange(p.id, e.target.value)}
-                    className="w-full p-3 bg-slate-50 text-slate-700 text-sm font-medium rounded-xl border-none outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 resize-none transition-all shadow-inner"
-                  />
+                  {userRole === 'admin' && selectedJudgeTab === 'MASTER_AVG' ? (
+                    <p className="text-xs text-slate-400 italic p-3 bg-slate-50 rounded-xl">
+                      Select a specific judge tab above to view their comments.
+                    </p>
+                  ) : (
+                    <textarea
+                      rows={2}
+                      placeholder={scoreData.is_finalized ? "No comments provided." : "Type constructive feedback or notes here..."}
+                      disabled={isDisabled}
+                      value={scoreData.comment || ''}
+                      onChange={(e) => handleCommentChange(p.id, e.target.value)}
+                      className="w-full p-3 bg-slate-50 text-slate-700 text-sm font-medium rounded-xl border-none outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60 resize-none transition-all shadow-inner"
+                    />
+                  )}
                 </div>
               </div>
             </div>

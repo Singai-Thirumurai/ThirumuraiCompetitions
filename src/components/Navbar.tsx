@@ -41,11 +41,11 @@ export default function Navbar() {
     <nav className="bg-indigo-950 text-white shadow-xl sticky top-0 z-[100]">
       <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
         <div className="flex items-center gap-8">
-          <Link to="/" className="flex items-center gap-2">
-             <ShieldCheck className="text-yellow-500" />
-             <span className="font-black text-xl tracking-tighter">TM 2026</span>
-          </Link>
-          
+          <div className="flex items-center gap-2 select-none">
+            <ShieldCheck className="text-yellow-500" />
+            <span className="font-black text-xl tracking-tighter">TM 2026</span>
+          </div>
+
           <div className="hidden md:flex gap-4">
             {(role === 'admin' || role === 'clerk') && (
               <Link to="/attendance" className="text-sm font-bold hover:text-indigo-300">Attendance</Link>
@@ -64,10 +64,18 @@ export default function Navbar() {
             <p className="text-[10px] font-black uppercase text-indigo-400">Logged in as</p>
             <p className="text-xs font-bold uppercase">{role}</p>
           </div>
-          <button 
-            onClick={async () => { await supabase.auth.signOut(); navigate('/login'); }}
-            className="bg-red-500/20 text-red-400 px-4 py-2 rounded-xl text-xs font-bold border border-red-500/50 hover:bg-red-500 hover:text-white transition"
-          >
+
+          <button
+            onClick={async () => {
+              const confirmLogout = window.confirm(
+                "Warning: You are logging out!\n\nPlease make sure you have saved all drafts and changes before leaving, otherwise unsaved scores will be lost.\n\nAre you sure you want to log out?"
+              );
+              if (confirmLogout) {
+                await supabase.auth.signOut(); 
+                navigate('/login');
+              }
+            }}
+            className="bg-red-500/20 text-red-400 px-4 py-2 rounded-xl text-xs font-bold border border-red-500/50 hover:bg-red-500 hover:text-white transition">
             Logout
           </button>
         </div>
