@@ -151,7 +151,8 @@ export default function JudgingPage() {
           signed_name: s.signed_name,
           song_titles: s.song_titles,
           topic: s.topic,
-          comment: s.comment
+          comment: s.comment,
+          duration_minutes: s.duration_minutes
         });
       });
 
@@ -181,6 +182,7 @@ export default function JudgingPage() {
             signed_name: finalizedScores.map(s => s.signed_name).join(', '),
             song_titles: finalizedScores[0].song_titles,
             topic: finalizedScores[0].topic,
+            duration_minutes: finalizedScores[0].duration_minutes,
             judge_count: finalizedScores.length,
             total_judges: allScores.length
           };
@@ -193,6 +195,7 @@ export default function JudgingPage() {
             signed_name: null,
             song_titles: firstScore?.song_titles,
             topic: firstScore?.topic,
+            duration_minutes: firstScore?.duration_minutes,
             judge_count: 0,
             total_judges: allScores.length
           };
@@ -210,7 +213,8 @@ export default function JudgingPage() {
           signed_name: s.signed_name,
           song_titles: s.song_titles,
           topic: s.topic,
-          comment: s.comment
+          comment: s.comment,
+          duration_minutes: s.duration_minutes
         };
       });
       setScores(scoreMap);
@@ -256,7 +260,8 @@ export default function JudgingPage() {
       song_titles: scores[p.id]?.song_titles || ['', ''],
       topic: scores[p.id]?.topic || '',
       comment: scores[p.id]?.comment || '',
-      total_score: parseFloat(calculateAverage(p.id)),
+      duration_minutes: scores[p.id]?.duration_minutes ?? null,
+      total_score: parseFloat(calculateTotal(p.id)),
       is_finalized: false
     }));
 
@@ -286,7 +291,8 @@ export default function JudgingPage() {
       song_titles: scores[p.id]?.song_titles || [],
       topic: scores[p.id]?.topic || '',
       comment: scores[p.id]?.comment || '',
-      total_score: parseFloat(calculateAverage(p.id)),
+      duration_minutes: scores[p.id]?.duration_minutes ?? null,
+      total_score: parseFloat(calculateTotal(p.id)),
       is_finalized: true,
       signed_name: signature
     }));
@@ -331,6 +337,8 @@ export default function JudgingPage() {
       const catParticipants = [...(participantsByCategory[catId] || [])].sort((a, b) => a.name.localeCompare(b.name));
       const rubricLabels: string[] = cat.rubric_labels || [];
       const isRecital = cat.competition_name.toLowerCase().includes('recital');
+      const isGroup = isRecital && cat.class_name.toLowerCase().includes('group');
+      const songCount = isGroup ? 1 : 2;
 
       // Build ordered judge list for this category
       const judgeMap = new Map<string, string>();
@@ -345,9 +353,10 @@ export default function JudgingPage() {
 
       // Build header row
       const headers: string[] = ['Name', 'Temple'];
+      if (isGroup) headers.push('Duration (mins)');
       judges.forEach(([, jName]) => {
         if (isRecital) {
-          [1, 2].forEach(songNum => {
+          Array.from({ length: songCount }, (_, i) => i + 1).forEach(songNum => {
             rubricLabels.forEach(label => headers.push(`${jName} - Song ${songNum}: ${label}`));
           });
         } else {
@@ -355,9 +364,10 @@ export default function JudgingPage() {
         }
         headers.push(`${jName} Total`);
         headers.push(`${jName} Status`);
+        if (isGroup) headers.push(`${jName} Comments`);
       });
       headers.push('Master Average');
-      judges.forEach(([, jName]) => headers.push(`${jName} Comments`));
+      if (!isGroup) judges.forEach(([, jName]) => headers.push(`${jName} Comments`));
 
       // Build data rows
       const rows: any[][] = [headers];
@@ -366,18 +376,25 @@ export default function JudgingPage() {
         const row: any[] = [p.name, p.temple || ''];
         const finalizedScores: any[] = [];
 
+        // Duration comes right after name/temple for group
+        if (isGroup) {
+          const anyScore = pScores[0];
+          row.push(anyScore?.duration_minutes ?? '');
+        }
+
         judges.forEach(([judgeId]) => {
           const js = pScores.find((s: any) => s.judge_id === judgeId);
           const marks: number[] = js?.marks || [];
           if (isRecital) {
-            [0, 1].forEach(songIdx => {
-              rubricLabels.forEach((_: string, li: number) => row.push(marks[(songIdx * 4) + li] ?? 0));
+            Array.from({ length: songCount }, (_, songIdx) => songIdx).forEach(songIdx => {
+              rubricLabels.forEach((_: string, li: number) => row.push(marks[(songIdx * rubricLabels.length) + li] ?? 0));
             });
           } else {
             rubricLabels.forEach((_: string, li: number) => row.push(marks[li] ?? 0));
           }
           row.push(js?.total_score ?? '');
           row.push(js?.is_finalized ? 'Finalized' : js ? 'Draft' : 'Not Started');
+          if (isGroup) row.push(js?.comment || '');
           if (js?.is_finalized) finalizedScores.push(js);
         });
 
@@ -388,10 +405,12 @@ export default function JudgingPage() {
           row.push('');
         }
 
-        judges.forEach(([judgeId]) => {
-          const js = pScores.find((s: any) => s.judge_id === judgeId);
-          row.push(js?.comment || '');
-        });
+        if (!isGroup) {
+          judges.forEach(([judgeId]) => {
+            const js = pScores.find((s: any) => s.judge_id === judgeId);
+            row.push(js?.comment || '');
+          });
+        }
 
         rows.push(row);
       });
@@ -409,14 +428,10 @@ export default function JudgingPage() {
     XLSX.writeFile(wb, `TM2026_Judging_${date}.xlsx`);
   };
 
-  const calculateAverage = (pId: string) => {
+  const calculateTotal = (pId: string) => {
     const data = scores[pId]?.marks || [];
     if (data.length === 0) return 0;
-
-    const sum = data.reduce((a: number, b: number) => a + b, 0);
-    const isRecital = currentAssignment.categories.competition_name.toLowerCase().includes('recital');
-
-    return isRecital ? (sum / 2).toFixed(1) : sum;
+    return data.reduce((a: number, b: number) => a + b, 0);
   };
 
   const handleSongTitleChange = (pId: string, songIdx: number, title: string) => {
@@ -442,12 +457,13 @@ export default function JudgingPage() {
 
     setScores(prev => {
       const current = prev[pId] || {};
+      const numLabels = currentAssignment?.categories?.rubric_labels?.length || 4;
       const existingMarks = Array.isArray(current.marks) && current.marks.length > 0
         ? current.marks
-        : new Array(8).fill(0);
+        : new Array(numLabels * 2).fill(0);
 
       const newMarks = [...existingMarks];
-      const actualIdx = (songIdx * 4) + labelIdx;
+      const actualIdx = (songIdx * numLabels) + labelIdx;
       newMarks[actualIdx] = val;
 
       return { ...prev, [pId]: { ...current, marks: newMarks } };
@@ -466,16 +482,23 @@ export default function JudgingPage() {
     setIsDirty(true);
     setScores(prev => {
       const current = prev[pId] || {};
-      return {
-        ...prev,
-        [pId]: { ...current, comment: value }
-      };
+      return { ...prev, [pId]: { ...current, comment: value } };
+    });
+  };
+
+  const handleDurationChange = (pId: string, value: string) => {
+    setIsDirty(true);
+    const num = value === '' ? null : parseFloat(value);
+    setScores(prev => {
+      const current = prev[pId] || {};
+      return { ...prev, [pId]: { ...current, duration_minutes: num } };
     });
   };
 
   const getRecitalMark = (pId: string, songIdx: number, labelIdx: number) => {
+    const numLabels = currentAssignment?.categories?.rubric_labels?.length || 4;
     const marks = scores[pId]?.marks || [];
-    return marks[(songIdx * 4) + labelIdx] || 0;
+    return marks[(songIdx * numLabels) + labelIdx] || 0;
   };
 
   // For judges: locked if THEIR scores are finalized for all participants
@@ -506,7 +529,7 @@ export default function JudgingPage() {
             <h1 className="text-xl font-bold flex items-center gap-2"><ClipboardList /> Judging</h1>
 
             {/* Global Actions */}
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
               {!isClassLocked ? (
                 <>
                   {userRole !== 'admin' && (
@@ -523,16 +546,8 @@ export default function JudgingPage() {
                     </button>
                   )}
                   {userRole === 'admin' && (
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-2 bg-yellow-500/20 px-4 py-2 rounded-xl text-yellow-200 text-sm font-bold border border-yellow-500/30">
-                        <Users size={16} /> Admin View (Read-Only)
-                      </div>
-                      <button
-                        onClick={exportToExcel}
-                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 rounded-xl text-sm font-bold hover:bg-emerald-500 transition text-white"
-                      >
-                        <Download size={16} /> Export Excel
-                      </button>
+                    <div className="flex items-center gap-2 bg-yellow-500/20 px-4 py-2 rounded-xl text-yellow-200 text-sm font-bold border border-yellow-500/30">
+                      <Users size={16} /> Admin View (Read-Only)
                     </div>
                   )}
                 </>
@@ -540,6 +555,16 @@ export default function JudgingPage() {
                 <div className="flex items-center gap-2 bg-green-500/20 px-4 py-2 rounded-xl text-green-300 text-sm font-bold border border-green-500/30">
                   <CheckCircle2 size={16} /> ALL JUDGES SIGNED OFF
                 </div>
+              )}
+
+              {/* Export button always visible for admin */}
+              {userRole === 'admin' && (
+                <button
+                  onClick={exportToExcel}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 rounded-xl text-sm font-bold hover:bg-emerald-500 transition text-white"
+                >
+                  <Download size={16} /> Export Excel
+                </button>
               )}
             </div>
           </div>
@@ -570,7 +595,78 @@ export default function JudgingPage() {
         </div>
       )}
 
-      <div className="max-w-5xl mx-auto p-4 mt-6 space-y-4">
+      {/* Judge-only floating progress sidebar */}
+      {userRole === 'judge' && participants.length > 0 && (() => {
+        const total = participants.length;
+        const graded = participants.filter(p => {
+          const marks = scores[p.id]?.marks;
+          return Array.isArray(marks) && marks.some((m: number) => m > 0);
+        }).length;
+        const allGraded = graded === total;
+        const pct = Math.round((graded / total) * 100);
+
+        return (
+          <div className="hidden lg:flex fixed right-4 top-40 z-40 w-48 flex-col gap-3">
+            {/* Progress card */}
+            <div className="bg-white rounded-2xl shadow-lg border border-slate-100 p-4 flex flex-col gap-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Progress</p>
+
+              {/* Circular-ish progress */}
+              <div className="flex flex-col items-center gap-1">
+                <div className={`text-3xl font-black ${allGraded ? 'text-green-600' : 'text-indigo-600'}`}>
+                  {graded}<span className="text-slate-300 text-lg font-bold">/{total}</span>
+                </div>
+                <p className="text-[10px] text-slate-400 font-bold uppercase">Participants Graded</p>
+              </div>
+
+              {/* Progress bar */}
+              <div className="w-full bg-slate-100 rounded-full h-2">
+                <div
+                  className={`h-2 rounded-full transition-all duration-500 ${allGraded ? 'bg-green-500' : 'bg-indigo-500'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <p className="text-center text-xs font-bold text-slate-500">{pct}% complete</p>
+
+              {allGraded
+                ? <p className="text-[10px] text-green-600 font-bold text-center">✅ All graded!</p>
+                : <p className="text-[10px] text-amber-500 font-bold text-center">⚠️ {total - graded} remaining</p>
+              }
+            </div>
+
+            {/* Save button */}
+            {!isClassLocked && (
+              <button
+                onClick={saveAllDrafts}
+                disabled={isSaving}
+                className={`w-full flex items-center justify-center gap-2 px-3 py-3 rounded-2xl text-xs font-black transition shadow-lg ${
+                  isDirty
+                    ? 'bg-red-500 hover:bg-red-400 text-white shadow-red-200 animate-pulse'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-200'
+                }`}
+              >
+                <Save size={14} />
+                {isSaving ? 'Saving...' : isDirty ? 'Save Now!' : 'Save Drafts'}
+              </button>
+            )}
+
+            {!isClassLocked && (
+              <p className="text-[9px] text-slate-400 text-center font-bold leading-tight px-1">
+                Remember to save before refreshing or switching tabs
+              </p>
+            )}
+
+            {isClassLocked && (
+              <div className="bg-green-50 border border-green-200 rounded-2xl p-3 text-center">
+                <CheckCircle2 size={20} className="text-green-500 mx-auto mb-1" />
+                <p className="text-[10px] font-black text-green-700 uppercase">Scores Locked</p>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      <div className={`max-w-5xl mx-auto p-4 mt-6 space-y-4 ${userRole === 'judge' ? 'lg:pr-56' : ''}`}>
         {userRole === 'admin' && participants.length > 0 && (
           <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-2 overflow-x-auto">
             <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider px-2 shrink-0">View Filter:</span>
@@ -604,6 +700,8 @@ export default function JudgingPage() {
         
         {participants.map((p) => {
           const isRecital = currentAssignment.categories.competition_name.toLowerCase().includes('recital');
+          const isGroup = currentAssignment.categories.class_name.toLowerCase().includes('group');
+          const songCount = isGroup ? 1 : 2;
 
           // const existingData = scores[p.id];
           // const scoreData = existingData || {
@@ -636,6 +734,7 @@ export default function JudgingPage() {
                 topic: specificJudgeRow.topic || '',
                 song_titles: specificJudgeRow.song_titles || ['', ''],
                 comment: specificJudgeRow.comment || '',
+                duration_minutes: specificJudgeRow.duration_minutes ?? null,
                 judge_count: scores[p.id]?.judge_count,
                 total_judges: scores[p.id]?.total_judges,
                 signed_name: specificJudgeRow.signed_name
@@ -651,9 +750,11 @@ export default function JudgingPage() {
             }
           }
 
+          const rubricLabels: string[] = currentAssignment.categories.rubric_labels || [];
+          const numRubrics = rubricLabels.length || 4;
           const safeMarks = Array.isArray(scoreData.marks) && scoreData.marks.length > 0
             ? scoreData.marks
-            : new Array(isRecital ? 8 : 4).fill(0);
+            : new Array(isRecital ? numRubrics * 2 : numRubrics).fill(0);
           const isDisabled = userRole === 'admin' || scoreData.is_finalized;
           
           
@@ -675,14 +776,12 @@ export default function JudgingPage() {
                 </div>
                 <div className="text-right">
                   <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1">
-                    {userRole === 'admin' ? 'Avg Score' : isRecital ? 'Total Avg' : 'Total Score'}
+                    {userRole === 'admin' ? 'Avg Score' : 'Total Score'}
                   </p>
                   <div className="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-lg font-mono font-black text-lg">
                     {userRole === 'admin' && selectedJudgeTab !== 'MASTER_AVG'
-                      ? (isRecital 
-                          ? (safeMarks.reduce((a: number, b: number) => a + b, 0) / 2).toFixed(1) 
-                          : safeMarks.reduce((a: number, b: number) => a + b, 0))
-                      : calculateAverage(p.id)
+                      ? safeMarks.reduce((a: number, b: number) => a + b, 0)
+                      : calculateTotal(p.id)
                     }
                   </div>
                 </div>
@@ -707,7 +806,30 @@ export default function JudgingPage() {
               <div className="p-4">
                 {isRecital ? (
                   <div className="space-y-6">
-                    {[0, 1].map((songIdx) => (
+                    {/* Duration field for group singing */}
+                    {isGroup && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-4">
+                        <span className="bg-amber-500 text-white text-[10px] font-bold px-2 py-1 rounded uppercase shrink-0">Duration</span>
+                        <div className="flex items-center gap-2 flex-1">
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            placeholder="e.g. 5.5"
+                            disabled={isDisabled}
+                            value={scoreData.duration_minutes ?? ''}
+                            onChange={(e) => handleDurationChange(p.id, e.target.value)}
+                            className="w-28 p-2 text-center text-lg font-black rounded-xl bg-white border-none shadow-sm outline-none focus:ring-2 focus:ring-amber-400"
+                          />
+                          <span className="text-sm font-bold text-amber-700">minutes</span>
+                          {scoreData.duration_minutes != null && scoreData.duration_minutes > 6 && (
+                            <span className="text-xs font-bold text-red-500 ml-2">⚠️ Exceeds 6 min limit</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {Array.from({ length: songCount }, (_, songIdx) => (
                       <div key={songIdx} className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
                         <div className="flex items-center gap-4 mb-4">
                           <span className="bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded uppercase">Song {songIdx + 1}</span>
@@ -720,21 +842,21 @@ export default function JudgingPage() {
                             className="flex-1 bg-white border-none rounded-xl p-2 text-sm font-bold shadow-sm outline-none focus:ring-2 focus:ring-indigo-400"
                           />
                         </div>
-                        <div className="grid grid-cols-4 gap-3">
-                          {currentAssignment.categories.rubric_labels.map((label: string, labelIdx: number) => {
+                        <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
+                          {rubricLabels.map((label: string, labelIdx: number) => {
                             const criteriaMax = currentAssignment?.categories?.max_marks?.[label] ?? 25;
                             return (
                               <div key={label}>
-                                <p className="text-[9px] uppercase font-bold text-slate-400 mb-1 truncate">
-                                  {label} <span className="text-indigo-500 font-mono text-[8px]">({criteriaMax})</span>
+                                <p className="text-xs uppercase font-bold text-slate-500 mb-1">
+                                  {label} <span className="text-indigo-500 font-mono text-[10px]">({criteriaMax})</span>
                                 </p>
                                 <input
                                   type="number"
                                   placeholder={`0-${criteriaMax}`}
                                   disabled={isDisabled}
-                                  value={safeMarks[(songIdx * 4) + labelIdx] ?? 0}
+                                  value={safeMarks[(songIdx * numRubrics) + labelIdx] ?? 0}
                                   onChange={(e) => handleRecitalScoreChange(p.id, songIdx, labelIdx, e.target.value)}
-                                  className="w-full p-2 text-center text-lg font-black rounded-xl bg-white border-none shadow-sm focus:ring-2 focus:ring-indigo-500"
+                                  className="w-full p-3 text-center text-xl font-black rounded-xl bg-white border-none shadow-sm focus:ring-2 focus:ring-indigo-500"
                                 />
                               </div>
                             );

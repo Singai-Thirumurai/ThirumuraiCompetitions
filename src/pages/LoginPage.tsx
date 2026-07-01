@@ -12,12 +12,29 @@ export default function LoginPage() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const {data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       alert(error.message);
       setLoading(false);
-    } else if (data.session) {
-      // SUCCESS: Manually push the user to attendance
+      return;
+    }
+
+    if (data.session) {
+      const userId = data.session.user.id;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .single();
+
+      // For judge/clerk: write a new session token — this kicks out any existing session
+      if (profile?.role === 'judge' || profile?.role === 'clerk') {
+        const token = crypto.randomUUID();
+        await supabase.from('sessions').upsert({ user_id: userId, token, updated_at: new Date().toISOString() });
+        sessionStorage.setItem('tm_session_token', token);
+      }
+
       navigate('/attendance', { replace: true });
     }
   };

@@ -5,31 +5,29 @@ import ProtectedRoute from './components/ProtectedRoute';
 import JudgingPage from './pages/JudgingPage';
 import Navbar from './components/Navbar';
 import LeaderboardPage from './pages/LeaderboardPage';
+import { useSessionGuard } from './hooks/useSessionGuard';
 
-function App() {
+function AppRoutes() {
+  useSessionGuard();
+
   return (
-    <BrowserRouter>
-
+    <>
       <Navbar />
-
       <Routes>
         <Route path="/login" element={<LoginPage />} />
 
-        {/* ONLY Clerks and Admins & Emceees can see Attendance */}
         <Route path="/attendance" element={
           <ProtectedRoute allowedRoles={['admin', 'clerk', 'emcee']}>
             <AttendancePage />
           </ProtectedRoute>
         } />
 
-        {/* ONLY Judges and Admins can see Judging */}
         <Route path="/judge" element={
           <ProtectedRoute allowedRoles={['admin', 'judge']}>
             <JudgingPage />
           </ProtectedRoute>
         } />
 
-        {/* ONLY Admins can see the Full Leaderboard */}
         <Route path="/leaderboard" element={
           <ProtectedRoute allowedRoles={['admin', 'judge']}>
             <LeaderboardPage />
@@ -38,6 +36,14 @@ function App() {
 
         <Route path="/" element={<Navigate to="/login" replace />} />
       </Routes>
+    </>
+  );
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <AppRoutes />
     </BrowserRouter>
   );
 }
